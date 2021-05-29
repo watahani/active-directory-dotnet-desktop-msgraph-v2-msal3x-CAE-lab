@@ -25,6 +25,7 @@
 //
 //------------------------------------------------------------------------------
 
+using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
 using Microsoft.Identity.Client;
@@ -41,12 +42,12 @@ namespace active_directory_wpf_msgraph_v2
                 // In that case we need to use Windows.Storage.ApplicationData.Current.LocalCacheFolder.Path + "\msalcache.bin" 
                 // which is a per-app read/write folder for packaged apps.
                 // See https://docs.microsoft.com/windows/msix/desktop/desktop-to-uwp-behind-the-scenes
-                CacheFilePath = Path.Combine(Windows.Storage.ApplicationData.Current.LocalCacheFolder.Path, ".msalcache.bin3");
+                CacheFilePath = Path.Combine(Windows.Storage.ApplicationData.Current.LocalCacheFolder.Path, ".msalcache.json");
             }
             catch (System.InvalidOperationException)
             {
                 // Fall back for an unpackaged desktop app
-                CacheFilePath = System.Reflection.Assembly.GetExecutingAssembly().Location + ".msalcache.bin3";
+                CacheFilePath = System.Reflection.Assembly.GetExecutingAssembly().Location + ".msalcache.json";
             }
         }
 
@@ -61,11 +62,17 @@ namespace active_directory_wpf_msgraph_v2
         {
             lock (FileLock)
             {
-                args.TokenCache.DeserializeMsalV3(File.Exists(CacheFilePath)
-                        ? ProtectedData.Unprotect(File.ReadAllBytes(CacheFilePath),
-                                                 null,
-                                                 DataProtectionScope.CurrentUser)
-                        : null);
+                //args.TokenCache.DeserializeMsalV3(File.Exists(CacheFilePath)
+                //        ? ProtectedData.Unprotect(File.ReadAllBytes(CacheFilePath),
+                //                                 null,
+                //                                 DataProtectionScope.CurrentUser)
+                //        : null);
+                var tokenCache = File.Exists(CacheFilePath)
+                            ? File.ReadAllBytes(CacheFilePath)
+                            : null;
+                var cacheString = System.Text.Encoding.UTF8.GetString(tokenCache);
+                Trace.Write($"[MSAL.Cache]Read Token Cache: {cacheString}");
+                args.TokenCache.DeserializeMsalV3(tokenCache);
             }
         }
 
@@ -77,11 +84,17 @@ namespace active_directory_wpf_msgraph_v2
                 lock (FileLock)
                 {
                     // reflect changesgs in the persistent store
-                    File.WriteAllBytes(CacheFilePath,
-                                       ProtectedData.Protect(args.TokenCache.SerializeMsalV3(),
-                                                             null,
-                                                             DataProtectionScope.CurrentUser)
-                                      );
+                    //File.WriteAllBytes(CacheFilePath,
+                    //                   ProtectedData.Protect(args.TokenCache.SerializeMsalV3(),
+                    //                                         null,
+                    //                                         DataProtectionScope.CurrentUser)
+                    //                  );
+                    //Unprotect Token Cache for debuging
+                    var tokenCache = args.TokenCache.SerializeMsalV3();
+                    var cacheString = System.Text.Encoding.UTF8.GetString(tokenCache);
+                    Trace.Write($"[MSAL.Cache]Write Token Cache: {cacheString}");
+
+                    File.WriteAllBytes(CacheFilePath, tokenCache);
                 }
             }
         }

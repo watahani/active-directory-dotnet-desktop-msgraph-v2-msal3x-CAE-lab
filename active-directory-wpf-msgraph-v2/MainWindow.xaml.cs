@@ -1,6 +1,9 @@
 ﻿using Microsoft.Identity.Client;
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
+using System.Net.Http.Headers;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Interop;
@@ -16,11 +19,11 @@ namespace active_directory_wpf_msgraph_v2
         //Set the API Endpoint to Graph 'me' endpoint. 
         // To change from Microsoft public cloud to a national cloud, use another value of graphAPIEndpoint.
         // Reference with Graph endpoints here: https://docs.microsoft.com/graph/deployments#microsoft-graph-and-graph-explorer-service-root-endpoints
-        string graphAPIEndpoint = "https://graph.microsoft.com/v1.0/me";
+        string graphAPIEndpoint = "https://graph.microsoft.com/v1.0/me/messages?$select=subject&$top=10";
 
         //Set the scope for API call to user.read
-        string[] scopes = new string[] { "user.read" };
-
+        string[] scopes = new string[] { "user.read", "mail.read" };
+        private IAccount currentAccount;
 
         public MainWindow()
         {
@@ -59,6 +62,7 @@ namespace active_directory_wpf_msgraph_v2
                 default:
                     var accounts = await app.GetAccountsAsync();
                     firstAccount = accounts.FirstOrDefault();
+                    this.currentAccount = firstAccount;
                     break;
             }
 
@@ -71,7 +75,7 @@ namespace active_directory_wpf_msgraph_v2
             {
                 // A MsalUiRequiredException happened on AcquireTokenSilent. 
                 // This indicates you need to call AcquireTokenInteractive to acquire a token
-                System.Diagnostics.Debug.WriteLine($"MsalUiRequiredException: {ex.Message}");
+                Trace.WriteLine($"MsalUiRequiredException: {ex.Message}");
 
                 try
                 {
@@ -97,6 +101,7 @@ namespace active_directory_wpf_msgraph_v2
                 ResultText.Text = await GetHttpContentWithToken(graphAPIEndpoint, authResult.AccessToken);
                 DisplayBasicTokenInfo(authResult);
                 this.SignOutButton.Visibility = Visibility.Visible;
+                currentAccount = authResult.Account;
             }
         }
 
@@ -116,6 +121,37 @@ namespace active_directory_wpf_msgraph_v2
                 //Add the token in Authorization header
                 request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
                 response = await httpClient.SendAsync(request);
+
+                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized && response.Headers.WwwAuthenticate.Any())
+                {
+                    var c = await response.Content.ReadAsStringAsync();
+                    AuthenticationHeaderValue bearer = response.Headers.WwwAuthenticate.First
+                        (v => v.Scheme == "Bearer");
+                    IEnumerable<string> parameters = bearer.Parameter.Split(',').Select(v => v.Trim()).ToList();
+                    var error = GetParameter(parameters, "error");
+                    var headers = String.Join(Environment.NewLine, response.Headers.Select(h => h.Key + ":" + String.Join(",",h.Value.ToArray())).ToArray());
+                    TokenInfoText.Text += $"{System.Environment.NewLine}[CAE] headers: {headers}";
+                    Trace.WriteLine($"[CAE] headers: {headers}");
+
+                    if (null != error && "insufficient_claims" == error)
+                    {
+                        TokenInfoText.Text += $"{System.Environment.NewLine}[CAE]Graph access has been blocked CAE";
+                        Trace.WriteLine($"[CAE]Graph access has been blocked CAE");
+                        var claimChallengeParameter = GetParameter(parameters, "claims");
+                        if (null != claimChallengeParameter)
+                        {
+                            var claimChallengebase64Bytes = System.Convert.FromBase64String(claimChallengeParameter);
+                            var claimChallenge = System.Text.Encoding.UTF8.GetString(claimChallengebase64Bytes);
+                            var newAccessToken = await GetAccessTokenWithClaimChallenge(scopes, claimChallenge);
+                            Trace.WriteLine($"[CAE]token renewal with claimChallenge: {claimChallengeParameter}");
+
+                        }
+                        else
+                        {
+                            //claimChallenge not found
+                        }
+                    }
+                }
                 var content = await response.Content.ReadAsStringAsync();
                 return content;
             }
@@ -123,6 +159,51 @@ namespace active_directory_wpf_msgraph_v2
             {
                 return ex.ToString();
             }
+        }
+
+        private async Task<string> GetAccessTokenWithClaimChallenge(string[] scopes, string claimChallenge)
+        {
+            var app = App.PublicClientApp;
+            AuthenticationResult authResult = null;
+
+            ResultText.Text = string.Empty;
+            TokenInfoText.Text += "Refresh Token with claimChallenge...";
+
+            //https://docs.microsoft.com/ja-jp/azure/active-directory/develop/app-resilience-continuous-access-evaluation
+            try
+            {
+                authResult = await app.AcquireTokenSilent(scopes, currentAccount)
+                                            .WithClaims(claimChallenge)
+                                            .ExecuteAsync()
+                                            .ConfigureAwait(false);
+            }
+            catch (MsalUiRequiredException)
+            {
+                try
+                {
+                    authResult = await app.AcquireTokenInteractive(scopes)
+                        .WithClaims(claimChallenge)
+                        .WithAccount(currentAccount)
+                        .ExecuteAsync()
+                        .ConfigureAwait(false);
+                }
+                catch (MsalException msalex)
+                {
+                    ResultText.Text = $"Error Acquiring Token:{System.Environment.NewLine}{msalex}";
+                }
+            }
+            catch (Exception ex)
+            {
+                ResultText.Text = $"Error Acquiring Token Silently:{System.Environment.NewLine}{ex}";
+                return null;
+            }
+            return authResult?.AccessToken;
+            
+        }
+
+        private static string GetParameter(IEnumerable<string> parameters, string paramName)
+        {
+            return parameters.Select(p => p.Split('=')).Where(p => p[0] == paramName).Select(p => p[1].Trim().Replace("\"", "")).First();
         }
 
         /// <summary>
@@ -162,8 +243,8 @@ namespace active_directory_wpf_msgraph_v2
 
         private void UseWam_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
         {
-            SignOutButton_Click(sender, e);
-            App.CreateApplication(howToSignIn.SelectedIndex != 2); // Not Azure AD accounts (that is use WAM accounts)
+            //SignOutButton_Click(sender, e);
+            //App.CreateApplication(howToSignIn.SelectedIndex != 2); // Not Azure AD accounts (that is use WAM accounts)
         }
     }
 }

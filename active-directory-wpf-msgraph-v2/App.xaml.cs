@@ -1,5 +1,7 @@
 ﻿using Microsoft.Identity.Client;
 using Microsoft.Identity.Client.Desktop;
+using System;
+using System.Diagnostics;
 using System.Linq.Expressions;
 using System.Windows;
 
@@ -14,14 +16,17 @@ namespace active_directory_wpf_msgraph_v2
     {
         static App()
         {
-            CreateApplication(true);
+            //doesn't use wam
+            CreateApplication(false);
         }
 
         public static void CreateApplication(bool useWam)
         {
             var builder = PublicClientApplicationBuilder.Create(ClientId)
                 .WithAuthority($"{Instance}{Tenant}")
-                .WithDefaultRedirectUri();
+                .WithDefaultRedirectUri()
+                .WithLogging(Log, LogLevel.Info, true)
+                .WithClientCapabilities(new[] { "cp1" });
 
             if (useWam)
             {
@@ -46,7 +51,16 @@ namespace active_directory_wpf_msgraph_v2
         private static string Tenant = "72aaac3c-90c8-49f1-8c96-6033d3ecd0b5";
         private static string Instance = "https://login.microsoftonline.com/";
         private static IPublicClientApplication _clientApp;
-
+        private static void Log(LogLevel level, string message, bool containsPii)
+        {
+            Trace.WriteLine($"[MSAL]: {level} {message}");
+            if (containsPii)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+            }
+            Console.WriteLine($"{level} {message}");
+            Console.ResetColor();
+        }
         public static IPublicClientApplication PublicClientApp { get { return _clientApp; } }
     }
 }
